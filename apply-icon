@@ -1,0 +1,124 @@
+#!/bin/bash
+set -euo pipefail
+
+fail() { printf '%s\n' "$*" >&2; exit 1; }
+valid_id() { [[ -n $1 && $1 != */* && $1 != *..* && $1 != *$'\n'* ]]; }
+hash_for() { printf '%s' "$1" | sha256sum | cut -c1-16; }
+
+data_home=${XDG_DATA_HOME:-$HOME/.local/share}
+apps_dir="$data_home/applications"
+icons_dir="$data_home/icons/esh.omicon"
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/esh.omicon"
+
+find_source() {
+  local app_id=$1 skip=${2:-} applications candidate relative
+  while IFS= read -r applications; do
+    [[ -d $applications ]] || continue
+    while IFS= read -r -d '' candidate; do
+      [[ $candidate == "$skip" ]] && continue
+      relative=${candidate#"$applications/"}
+      [[ ${relative//\//-} == "$app_id.desktop" ]] && { printf '%s\n' "$candidate"; return; }
+    done < <(find "$applications" -type f -name '*.desktop' -print0 2>/dev/null)
+  done < <(printf '%s\n' "$apps_dir" "${XDG_DATA_DIRS:-/usr/local/share:/usr/share}" /usr/share/omarchy/applications | tr ':' '\n' | sed '/\/applications$/!s|$|/applications|')
+}
+
+desktop_icon() {
+  awk '/^\[Desktop Entry\]$/ { desktop=1; next } /^\[/ { desktop=0 } desktop && /^Icon=/ { sub(/^Icon=/, ""); print; exit }' "$1"
+}
+
+remember_original() {
+  local app_id=$1 target=$2 hash record pristine
+  hash=$(hash_for "$app_id")
+  record="$state_dir/$hash"
+  [[ -f $record.id ]] && return
+  mkdir -p "$state_dir"
+  if [[ -f $target ]]; then
+    if [[ $(desktop_icon "$target") == "$icons_dir/"* ]]; then
+      pristine=$(find_source "$app_id" "$target")
+      if [[ -n $pristine ]]; then cp "$pristine" "$record.desktop"; else : >"$record.generated"; fi
+    else
+      cp "$target" "$record.desktop"
+    fi
+  else
+    : >"$record.generated"
+  fi
+  printf '%s\n' "$app_id" >"$record.id"
+}
+
+list_changes() {
+  local target app_id hash record icon
+  mkdir -p "$state_dir"
+  if [[ -d $apps_dir ]]; then
+    while IFS= read -r -d '' target; do
+      [[ $(desktop_icon "$target") == "$icons_dir/"* ]] || continue
+      app_id=${target##*/}; app_id=${app_id%.desktop}
+      valid_id "$app_id" && remember_original "$app_id" "$target"
+    done < <(find "$apps_dir" -maxdepth 1 -type f -name '*.desktop' -print0)
+  fi
+  for record in "$state_dir"/*.id; do
+    [[ -f $record ]] || continue
+    app_id=$(<"$record")
+    valid_id "$app_id" || continue
+    hash=$(hash_for "$app_id")
+    icon="$icons_dir/$hash.png"
+    target="$apps_dir/$app_id.desktop"
+    [[ -f $target && -f $icon && $(desktop_icon "$target") == "$icon" ]] && printf '%s\t%s\n' "$app_id" "$icon"
+  done
+}
+
+apply_icon() {
+  local app_id=${1%.desktop} image=${2:-} source target icon hash tmp
+  valid_id "$app_id" || fail "Invalid application"
+  [[ $image == '~/'* ]] && image="$HOME/${image#\~/}"
+  [[ -f $image ]] || fail "Image not found"
+  magick identify "$image" >/dev/null 2>&1 || fail "That file is not a readable image"
+  target="$apps_dir/$app_id.desktop"
+  source=$(find_source "$app_id")
+  [[ -n $source ]] || fail "Application launcher not found"
+  mkdir -p "$apps_dir" "$icons_dir"
+  remember_original "$app_id" "$target"
+  hash=$(hash_for "$app_id")
+  icon="$icons_dir/$hash.png"
+  magick "$image[0]" -resize '512x512>' "$icon"
+  tmp=$(mktemp "${target}.XXXXXX")
+  trap 'rm -f "$tmp"' EXIT
+  awk -v icon="$icon" '
+    /^\[/ { if (desktop && !seen) print "Icon=" icon; desktop = ($0 == "[Desktop Entry]"); seen = 0 }
+    desktop && /^Icon=/ { if (!seen) print "Icon=" icon; seen = 1; next }
+    { print }
+    END { if (desktop && !seen) print "Icon=" icon }
+  ' "$source" >"$tmp"
+  chmod --reference="$source" "$tmp"
+  mv "$tmp" "$target"
+  trap - EXIT
+  update-desktop-database "$apps_dir" >/dev/null 2>&1 || true
+  printf 'Icon updated\n'
+}
+
+revert_icon() {
+  local app_id=${1%.desktop} target hash record tmp
+  valid_id "$app_id" || fail "Invalid application"
+  target="$apps_dir/$app_id.desktop"
+  remember_original "$app_id" "$target"
+  hash=$(hash_for "$app_id")
+  record="$state_dir/$hash"
+  if [[ -f $record.desktop ]]; then
+    tmp=$(mktemp "${target}.XXXXXX")
+    cp "$record.desktop" "$tmp"
+    mv "$tmp" "$target"
+  elif [[ -f $record.generated ]]; then
+    rm -f "$target"
+  else
+    fail "Original icon backup not found"
+  fi
+  rm -f "$icons_dir/$hash.png" "$record.id" "$record.desktop" "$record.generated"
+  update-desktop-database "$apps_dir" >/dev/null 2>&1 || true
+  printf 'Icon restored\n'
+}
+
+case ${1:-} in
+  apply) apply_icon "${2:-}" "${3:-}" ;;
+  list) list_changes ;;
+  revert) revert_icon "${2:-}" ;;
+  *) fail "Usage: apply-icon {apply <app-id> <image>|list|revert <app-id>}" ;;
+esac

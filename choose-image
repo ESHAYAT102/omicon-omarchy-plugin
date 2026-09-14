@@ -1,0 +1,26 @@
+#!/usr/bin/python3
+import sys
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk
+
+dialog = Gtk.FileChooserDialog(
+    title="Choose an app icon",
+    action=Gtk.FileChooserAction.OPEN,
+)
+dialog.add_buttons(
+    Gtk.STOCK_CANCEL,
+    Gtk.ResponseType.CANCEL,
+    Gtk.STOCK_OPEN,
+    Gtk.ResponseType.OK,
+)
+images = Gtk.FileFilter()
+images.set_name("Images")
+images.add_pixbuf_formats()
+dialog.add_filter(images)
+
+if dialog.run() == Gtk.ResponseType.OK:
+    sys.stdout.write(dialog.get_filename())
+dialog.destroy()
