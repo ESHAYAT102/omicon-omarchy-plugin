@@ -18,7 +18,7 @@ find_source() {
       [[ $candidate == "$skip" ]] && continue
       relative=${candidate#"$applications/"}
       [[ ${relative//\//-} == "$app_id.desktop" ]] && { printf '%s\n' "$candidate"; return; }
-    done < <(find "$applications" -type f -name '*.desktop' -print0 2>/dev/null)
+    done < <(find "$applications" \( -type f -o -type l \) -name '*.desktop' -print0 2>/dev/null)
   done < <(printf '%s\n' "$apps_dir" "${XDG_DATA_DIRS:-/usr/local/share:/usr/share}" "$HOME/.local/share/flatpak/exports/share" /var/lib/flatpak/exports/share /usr/share/omarchy | tr ':' '\n' | sed '/\/applications$/!s|$|/applications|')
 }
 
@@ -73,7 +73,7 @@ apply_icon() {
   [[ -f $image ]] || fail "Image not found"
   magick identify "$image" >/dev/null 2>&1 || fail "That file is not a readable image"
   target="$apps_dir/$app_id.desktop"
-  source=$(find_source "$app_id")
+  source=$(find_source "$app_id") || fail "Application launcher not found"
   [[ -n $source ]] || fail "Application launcher not found"
   mkdir -p "$apps_dir" "$icons_dir"
   remember_original "$app_id" "$target"
