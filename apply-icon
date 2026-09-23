@@ -19,7 +19,7 @@ find_source() {
       relative=${candidate#"$applications/"}
       [[ ${relative//\//-} == "$app_id.desktop" ]] && { printf '%s\n' "$candidate"; return; }
     done < <(find "$applications" -type f -name '*.desktop' -print0 2>/dev/null)
-  done < <(printf '%s\n' "$apps_dir" "${XDG_DATA_DIRS:-/usr/local/share:/usr/share}" /usr/share/omarchy/applications | tr ':' '\n' | sed '/\/applications$/!s|$|/applications|')
+  done < <(printf '%s\n' "$apps_dir" "${XDG_DATA_DIRS:-/usr/local/share:/usr/share}" "$HOME/.local/share/flatpak/exports/share" /var/lib/flatpak/exports/share /usr/share/omarchy | tr ':' '\n' | sed '/\/applications$/!s|$|/applications|')
 }
 
 desktop_icon() {
